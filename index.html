@@ -256,7 +256,7 @@
     flash.shadow.camera.near=0.3; flash.shadow.camera.far=28; flash.shadow.bias=-0.0006;
     const flashTarget=new THREE.Object3D(); scene.add(flashTarget); flash.target=flashTarget;
     scene.add(flash);
-    let flashOn=false, flashBatt=1.0, flashFlick=1, FLASH_INT=2.2, batteryOn=false;  // batteryOn=false → unlimited (toggle in admin)
+    let flashOn=false, flashBatt=1.0, flashFlick=1, FLASH_INT=2.8, batteryOn=false;  // batteryOn=false → unlimited (toggle in admin)
 
     // ===== texture helpers =====
     function speckle(ctx,w,h,n,alpha,warm){
@@ -507,7 +507,7 @@
         buildWall:function(){return wall_concrete("#8d8a82","rgba(0,0,0,0.18)","rgba(20,20,20,0.7)");},
         buildFloor:function(){return floor_concrete("#6f6e68");}, buildCeil:function(){return ceil_flat("#43464a","rgba(0,0,0,0.25)");},
         buildFix:function(){return {mat:new THREE.MeshBasicMaterial({map:fixtureTexC("#2a2c2e","#eef3ff","#cfe0f5",true)}),base:{r:0.86,g:0.92,b:1.0}};} },
-      { name:"PIPE DREAMS", wallH:2.7, fog:0x16201c, fogDensity:0.085,
+      { name:"PIPE DREAMS", wallH:4.7, fog:0x16201c, fogDensity:0.058,
         hemiSky:0x6a7a70, hemiGnd:0x0e1310, hemiInt:0.50, ambColor:0x0c1411, ambInt:0.32,
         base:0x20231f, glowRGB:[255,170,90], exitColor:0xffa24a,
         audio:{hum:0.030,buzz:0.020,drone:0.075,droneF:36,droneLP:150},
@@ -535,18 +535,27 @@
     let wallMat,pillarMat,baseMat,floorMat,ceilMat,glowMat,wallTex,pillarTex,floorTex,ceilTex,fixMat=null,floor,ceil,fixtures,glows;
     let hWalls,vWalls,pillars,aabbs,buckets,frame=0,FIX_BASE={r:1,g:1,b:1};
     let exits=[], exitLatch=false, transitioning=false;
-    const startCell=GRID/2;
-    // ----- Level-1 systems state (garages, props, particles, smilers, blackout) -----
-    const SEC=6, NSEC=GRID/SEC;                 // section grid: 6x6 cells per section
-    let isGarageCell=new Uint8Array(GRID*GRID); // 1 = cell belongs to a parking-garage section
+    let startCell=GRID/2;
+    // ----- per-level generation state -----
+    // region/cell types — drive decor placement AND the dynamic audio zone
+    const CT_SOLID=0,CT_ROOM=1,CT_CORRIDOR=2,CT_GARAGE=3,CT_CHAMBER=4,CT_OFFICE=5,CT_CUBICLE=6,CT_MACHINE=7,CT_HALL=8,CT_STORAGE=9,CT_SPECIAL=10,CT_LOBBY=11;
+    let cellType=new Uint8Array(GRID*GRID);          // region of each cell (CT_*)
+    let openList=[];                                  // [i,j] cells usable for placement (spawn/exits/AI)
+    let landmarks=[];                                 // {type,i,j} memorable points of interest
+    let spawnI=GRID>>1, spawnJ=GRID>>1, spawnX=0, spawnZ=0;
+    let WH=null, WV=null;                             // wall-edge grids (thin walls on cell boundaries)
+    // ----- Level systems state (garages, props, particles, smilers, blackout) -----
+    const SEC=6, NSEC=GRID/SEC;
+    let isGarageCell=new Uint8Array(GRID*GRID); // legacy alias; now mirrors cellType===CT_GARAGE
     let decor=null;                             // shared prop material palette (per level, tracked)
     let dustPts=null, dustData=null;            // drifting dust particle system
     let smilers=[];                             // active Smilers
     let levelHasBlackout=false;                 // true on Level 1
     const blackout={active:false,phase:"",t:0,dur:0,alarmT:0,lvl:0}; // phase: onset|dark|restore
-    function cellGarage(ci,cj){ return ci>=0&&ci<GRID&&cj>=0&&cj<GRID&&isGarageCell[ci*GRID+cj]===1; }
+    function ctOf(i,j){ return (i>=0&&i<GRID&&j>=0&&j<GRID)?cellType[i*GRID+j]:CT_SOLID; }
+    function cellGarage(ci,cj){ return ctOf(ci,cj)===CT_GARAGE; }
     function playerCell(){ return [Math.floor((px+off)/CELL),Math.floor((pz+off)/CELL)]; }
-    function nearStart(i,j){ return Math.abs(i-startCell)<=1 && Math.abs(j-startCell)<=1; }
+    function nearStart(i,j){ return Math.abs(i-spawnI)<=1 && Math.abs(j-spawnJ)<=1; }
     function bkey(x,z){ return x+","+z; }
     function addAABB(a,b,c,d){ aabbs.push({minX:a,maxX:b,minZ:c,maxZ:d,_f:-1}); }
     function instAA(geo,mat,list,y){ const m=new THREE.InstancedMesh(geo,mat,list.length); for(let k=0;k<list.length;k++){ M.makeTranslation(list[k][0],y,list[k][1]); m.setMatrixAt(k,M); } m.instanceMatrix.needsUpdate=true; worldGroup.add(m); return m; }
@@ -570,7 +579,7 @@
       return [x,z];
     }
     let px=0,pz=0;
-    function resetPlayer(){ px=(startCell+0.5)*CELL-off; pz=(startCell+0.5)*CELL-off; const a=(MYCAM-1)/8*Math.PI*2, rr=(MYCAM===1?0:1.8); px+=Math.sin(a)*rr; pz+=Math.cos(a)*rr; }
+    function resetPlayer(){ px=spawnX; pz=spawnZ; const a=(MYCAM-1)/8*Math.PI*2, rr=(MYCAM===1?0:1.8); px+=Math.sin(a)*rr; pz+=Math.cos(a)*rr; }
     (function(){ const cn=document.getElementById("camno"); if(cn)cn.textContent=(MYCAM<10?"0":"")+MYCAM; })();
 
     // ----- exits (the way to the next level): a glowing rift placed far from spawn -----
@@ -603,19 +612,19 @@
     }
     function buildExits(lv,th){
       exits=[];
-      const minD=GRID*CELL*0.34, spacing=GRID*CELL*0.30, n=2+(srand()<0.5?1:0);
-      const sx=(startCell+0.5)*CELL-off, sz=(startCell+0.5)*CELL-off, placed=[];
+      const minD=GRID*CELL*0.32, spacing=GRID*CELL*0.26, n=2+(srand()<0.5?1:0), placed=[];
+      const pool=openList.length?openList:[[spawnI,spawnJ]];
       for(let e=0;e<n;e++){
         let bx=0,bz=0,ok=false;
-        for(let t=0;t<200;t++){
-          const ci=Math.floor(srand()*GRID), cj=Math.floor(srand()*GRID);
-          const cx=(ci+0.5)*CELL-off, cz=(cj+0.5)*CELL-off;
-          if(Math.hypot(cx-sx,cz-sz)<minD) continue;
+        for(let t=0;t<300;t++){
+          const c=pool[(srand()*pool.length)|0]; const cx=(c[0]+0.5)*CELL-off, cz=(c[1]+0.5)*CELL-off;
+          if(Math.hypot(cx-spawnX,cz-spawnZ)<minD) continue;
           let far=true; for(const p of placed){ if(Math.hypot(cx-p[0],cz-p[1])<spacing){ far=false; break; } }
           if(!far) continue;
+          const r=collide(cx,cz,0.5); if(Math.hypot(r[0]-cx,r[1]-cz)>0.3) continue;   // must be open floor
           bx=cx; bz=cz; ok=true; break;
         }
-        if(!ok){ const ci=Math.floor(srand()*GRID), cj=Math.floor(srand()*GRID); bx=(ci+0.5)*CELL-off; bz=(cj+0.5)*CELL-off; }
+        if(!ok){ const c=pool[(srand()*pool.length)|0]; bx=(c[0]+0.5)*CELL-off; bz=(c[1]+0.5)*CELL-off; }
         placed.push([bx,bz]); exits.push(makeExit(bx,bz,th));
       }
     }
@@ -629,23 +638,180 @@
       for(const d of worldDisposables){ try{ d.dispose(); }catch(e){} }
       worldDisposables.length=0; exits=[]; dustPts=null; dustData=null;
     }
-    // Level 1 only: mark ~25% of sections as parking garages (own RNG so other levels' mazes are untouched)
-    function computeGarages(lv){
-      isGarageCell=new Uint8Array(GRID*GRID);
-      if(lv!==1) return;
-      let gs=(levelSeed(lv)^0x51ED2701)>>>0; if(!gs)gs=1;
-      const grnd=function(){ gs|=0; gs=gs+0x6D2B79F5|0; let t=Math.imul(gs^gs>>>15,1|gs); t=t+Math.imul(t^t>>>7,61|t)^t; return ((t^t>>>14)>>>0)/4294967296; };
-      const startSec=[Math.floor(startCell/SEC),Math.floor(startCell/SEC)];
-      for(let si=0;si<NSEC;si++) for(let sj=0;sj<NSEC;sj++){
-        if(si===startSec[0]&&sj===startSec[1]) continue;     // keep spawn as a hall
-        if(grnd()>=0.25) continue;                           // ~25% become garages
-        for(let ci=si*SEC;ci<si*SEC+SEC;ci++) for(let cj=sj*SEC;cj<sj*SEC+SEC;cj++) isGarageCell[ci*GRID+cj]=1;
+    // ===== per-level generation framework =====
+    // Each level is built on a shared substrate of thin wall-edges (WH/WV) + a per-cell
+    // region map (cellType). The five generators below carve VERY different layouts.
+    function gInit(){ WH=[]; WV=[]; cellType=new Uint8Array(GRID*GRID); openList=[]; landmarks=[];
+      for(let i=0;i<GRID;i++){ WH[i]=new Uint8Array(GRID+1); }
+      for(let i=0;i<=GRID;i++){ WV[i]=new Uint8Array(GRID); } }
+    function inB(i,j){ return i>=0&&i<GRID&&j>=0&&j<GRID; }
+    function setType(i,j,t){ if(inB(i,j)) cellType[i*GRID+j]=t; }
+    function fillAllWalls(){ for(let i=0;i<GRID;i++)for(let jb=0;jb<=GRID;jb++)WH[i][jb]=1; for(let ib=0;ib<=GRID;ib++)for(let j=0;j<GRID;j++)WV[ib][j]=1; }
+    function perimeter(){ for(let i=0;i<GRID;i++){ WH[i][0]=1; WH[i][GRID]=1; } for(let j=0;j<GRID;j++){ WV[0][j]=1; WV[GRID][j]=1; } }
+    function linkH(i,j){ if(i>=0&&i<GRID-1&&j>=0&&j<GRID) WV[i+1][j]=0; }   // open passage between (i,j)&(i+1,j)
+    function linkV(i,j){ if(i>=0&&i<GRID&&j>=0&&j<GRID-1) WH[i][j+1]=0; }   // open passage between (i,j)&(i,j+1)
+    // carve a fully-open rectangle (remove interior walls), set region type, optionally wall its border
+    function carveRoom(i0,j0,w,h,type,border){
+      const i1=Math.min(GRID-1,i0+w-1), j1=Math.min(GRID-1,j0+h-1); i0=Math.max(0,i0); j0=Math.max(0,j0);
+      for(let i=i0;i<=i1;i++)for(let j=j0;j<=j1;j++){ setType(i,j,type);
+        if(i<i1) WV[i+1][j]=0; if(j<j1) WH[i][j+1]=0; }
+      if(border){ for(let i=i0;i<=i1;i++){ WH[i][j0]=1; WH[i][j1+1]=1; } for(let j=j0;j<=j1;j++){ WV[i0][j]=1; WV[i1+1][j]=1; } }
+      return [i0,j0,i1,j1];
+    }
+    function doorH(i,jb){ if(i>=0&&i<GRID&&jb>=0&&jb<=GRID) WH[i][jb]=0; }
+    function doorV(ib,j){ if(ib>=0&&ib<=GRID&&j>=0&&j<GRID) WV[ib][j]=0; }
+    function addWallRunH(i0,i1,jb){ for(let i=i0;i<=i1;i++) if(i>=0&&i<GRID) WH[i][jb]=1; }
+    function addWallRunV(ib,j0,j1){ for(let j=j0;j<=j1;j++) if(j>=0&&j<GRID) WV[ib][j]=1; }
+    function clearArea(i0,j0,w,h){ const i1=Math.min(GRID-1,i0+w-1),j1=Math.min(GRID-1,j0+h-1); for(let i=Math.max(0,i0);i<=i1;i++)for(let j=Math.max(0,j0);j<=j1;j++){ if(i<i1)WV[i+1][j]=0; if(j<j1)WH[i][j+1]=0; } }
+    function rnd(n){ return Math.floor(srand()*n); }
+
+    // LEVEL 0 — endless liminal office: mostly open, broken by partition walls & support
+    // columns into irregular rooms, long sightlines and dead-ends. Not a maze.
+    function genLobby(){
+      perimeter();
+      for(let i=0;i<GRID;i++)for(let j=0;j<GRID;j++) setType(i,j,CT_LOBBY);
+      // scattered partition rooms (open borders w/ wide gaps → irregular interconnected space)
+      const rooms=14+rnd(6);
+      for(let r=0;r<rooms;r++){ const w=4+rnd(7),h=4+rnd(7),i0=1+rnd(GRID-w-2),j0=1+rnd(GRID-h-2);
+        const b=carveRoom(i0,j0,w,h,CT_LOBBY,true);
+        // punch 2–4 doorways so nothing is sealed
+        for(let d=0;d<2+rnd(3);d++){ const side=rnd(4);
+          if(side===0) doorH(b[0]+rnd(b[2]-b[0]+1),b[1]);
+          else if(side===1) doorH(b[0]+rnd(b[2]-b[0]+1),b[3]+1);
+          else if(side===2) doorV(b[0],b[1]+rnd(b[3]-b[1]+1));
+          else doorV(b[2]+1,b[1]+rnd(b[3]-b[1]+1)); }
       }
+      // free-standing partial walls (dividers / dead-ends, no enclosure)
+      for(let k=0;k<16;k++){ const len=2+rnd(6); if(srand()<0.5){ const j=1+rnd(GRID-1),i=1+rnd(GRID-len-1); addWallRunH(i,i+len,j); } else { const i=1+rnd(GRID-1),j=1+rnd(GRID-len-1); addWallRunV(i,j,j+len); } }
+      // occasional "impossible" tight spiral pocket
+      if(srand()<0.7){ const i=4+rnd(GRID-12),j=4+rnd(GRID-12); addWallRunH(i,i+4,j); addWallRunV(i+4,j,j+4); addWallRunH(i+1,i+4,j+4); addWallRunV(i+1,j+1,j+3); }
+      landmarks.push({type:"atrium",i:spawnI,j:spawnJ});
+    }
+
+    // doored room helper (additive): wall the border, mark interior, punch 1–2 doors → always reachable
+    function roomDoored(i0,j0,w,h,type,doors){ const b=carveRoom(i0,j0,w,h,type,true); doors=doors||1;
+      for(let d=0;d<doors;d++){ const side=rnd(4);
+        if(side===0) doorH(b[0]+rnd(b[2]-b[0]+1),b[1]);
+        else if(side===1) doorH(b[0]+rnd(b[2]-b[0]+1),b[3]+1);
+        else if(side===2) doorV(b[0],b[1]+rnd(b[3]-b[1]+1));
+        else doorV(b[2]+1,b[1]+rnd(b[3]-b[1]+1)); }
+      return b; }
+
+    // LEVEL 1 — maintenance complex: open service floor broken into aisles by equipment blocks,
+    // with garages, storage & utility rooms hung off it. Connectivity guaranteed (open background).
+    function genMaintenance(){
+      perimeter();
+      for(let i=0;i<GRID;i++)for(let j=0;j<GRID;j++) setType(i,j,CT_CORRIDOR);   // service floor
+      // long aisle dividers with gaps → readable service corridors, never sealed
+      for(let k=0;k<10;k++){ if(srand()<0.5){ const j=2+rnd(GRID-4); let i=1; while(i<GRID-1){ const run=2+rnd(5); addWallRunH(i,Math.min(GRID-2,i+run),j); i+=run+1+rnd(2); } }
+        else { const i=2+rnd(GRID-4); let j=1; while(j<GRID-1){ const run=2+rnd(5); addWallRunV(i,j,Math.min(GRID-2,j+run)); j+=run+1+rnd(2); } } }
+      // 2–3 big parking garages
+      const ng=2+rnd(2); for(let g=0;g<ng;g++){ const w=7+rnd(4),h=7+rnd(4); roomDoored(2+rnd(GRID-w-4),2+rnd(GRID-h-4),w,h,CT_GARAGE,2); }
+      // storage & utility rooms
+      for(let r=0;r<12+rnd(6);r++){ const w=2+rnd(3),h=2+rnd(3); roomDoored(2+rnd(GRID-w-4),2+rnd(GRID-h-4),w,h,srand()<0.5?CT_STORAGE:CT_HALL,1); }
+      landmarks.push({type:"checkpoint",i:4,j:4});
+    }
+
+    // LEVEL 2 — pipe network: a few HUGE chambers (wide-mouthed) joined by open walkways,
+    // huge pipe runs as obstacles. Tall, vertical-feeling, navigate around infrastructure.
+    function genPipes(){
+      perimeter();
+      for(let i=0;i<GRID;i++)for(let j=0;j<GRID;j++) setType(i,j,CT_CORRIDOR);   // walkway background
+      const chambers=[]; const n=4+rnd(2);
+      for(let c=0;c<n;c++){ const w=8+rnd(5),h=8+rnd(5),i0=2+rnd(GRID-w-4),j0=2+rnd(GRID-h-4);
+        const b=carveRoom(i0,j0,w,h,CT_CHAMBER,true);
+        // wide mouths (multi-cell doorways) on two sides so chambers read as huge halls
+        for(let i=b[0];i<=b[2];i+=2){ doorH(i,b[1]); doorH(i,b[3]+1); }
+        for(let j=b[1];j<=b[3];j+=2){ doorV(b[0],j); doorV(b[2]+1,j); }
+        chambers.push([i0+(w>>1),j0+(h>>1)]); }
+      landmarks.push({type:"pumphouse",i:chambers[0][0],j:chambers[0][1]});
+      spawnI=chambers[0][0]; spawnJ=chambers[0][1];
+    }
+
+    // LEVEL 3 — power station: open maintenance floor between large equipment rooms
+    // (generator/transformer chambers) + a control room. Industrial grid of halls.
+    function genElectrical(){
+      perimeter();
+      for(let i=0;i<GRID;i++)for(let j=0;j<GRID;j++) setType(i,j,CT_CORRIDOR);
+      // grid of big equipment rooms in the bays (doored)
+      for(let bi=2;bi<GRID-6;bi+=8) for(let bj=2;bj<GRID-6;bj+=8){ if(srand()<0.35) continue;
+        const w=4+rnd(2),h=4+rnd(2); roomDoored(bi,bj,w,h,srand()<0.6?CT_MACHINE:CT_ROOM,2); }
+      // a couple of aisle dividers for the industrial feel
+      for(let k=0;k<6;k++){ if(srand()<0.5){ const j=2+rnd(GRID-4); let i=1; while(i<GRID-1){ const run=3+rnd(5); addWallRunH(i,Math.min(GRID-2,i+run),j); i+=run+2+rnd(2); } }
+        else { const i=2+rnd(GRID-4); let j=1; while(j<GRID-1){ const run=3+rnd(5); addWallRunV(i,j,Math.min(GRID-2,j+run)); j+=run+2+rnd(2); } } }
+      landmarks.push({type:"control",i:5,j:5}); setType(5,5,CT_MACHINE);
+    }
+
+    // LEVEL 4 — abandoned office building: perimeter ring corridor, perimeter rooms, central cubicles
+    function genOffice(){
+      perimeter();
+      for(let i=0;i<GRID;i++)for(let j=0;j<GRID;j++) setType(i,j,CT_OFFICE);
+      // outer ring corridor (2 cells in from the edge) — walls on the inner side
+      const m=2; addWallRunH(m,GRID-1-m,m+1+0); // placeholder; build ring walls explicitly below
+      // build a ring of rooms around the perimeter, each opening inward to the ring corridor
+      const rs=4;             // room depth
+      for(let i=m;i<GRID-m-rs;i+=rs){ // top & bottom rows of offices
+        carveRoom(i,m,rs-1,rs-1,CT_ROOM,true); doorV(i,m+rs-2);
+        carveRoom(i,GRID-m-rs,rs-1,rs-1,CT_ROOM,true); doorV(i,GRID-m-rs);
+      }
+      for(let j=m;j<GRID-m-rs;j+=rs){ // left & right columns
+        carveRoom(m,j,rs-1,rs-1,CT_ROOM,true); doorH(m+rs-2,j);
+        carveRoom(GRID-m-rs,j,rs-1,rs-1,CT_ROOM,true); doorH(GRID-m-rs,j);
+      }
+      // central cubicle farm: open, partitions added as low props in decor
+      const ci0=m+rs, cj0=m+rs, cw=GRID-2*(m+rs), ch=GRID-2*(m+rs);
+      carveRoom(ci0,cj0,cw,ch,CT_CUBICLE,false);
+      // a few special rooms: conference, break, server (mark by type for decor)
+      setType(ci0+1,cj0+1,CT_SPECIAL); landmarks.push({type:"conference",i:ci0+2,j:cj0+2});
+      landmarks.push({type:"server",i:GRID-m-rs+1,j:m+1}); setType(GRID-m-rs+1,m+1,CT_MACHINE);
+      landmarks.push({type:"break",i:m+1,j:GRID-m-rs+1});
+      spawnI=ci0+(cw>>1); spawnJ=cj0+(ch>>1);
+    }
+
+    const GENERATORS=[genLobby,genMaintenance,genPipes,genElectrical,genOffice];
+
+    // protect a 3x3 open area around the spawn so the player never starts trapped
+    function clearSpawn(){ spawnI=Math.max(1,Math.min(GRID-2,spawnI)); spawnJ=Math.max(1,Math.min(GRID-2,spawnJ));
+      for(let i=spawnI-1;i<=spawnI+1;i++)for(let j=spawnJ-1;j<=spawnJ+1;j++){ if(inB(i,j)&&cellType[i*GRID+j]===CT_SOLID) setType(i,j,CT_ROOM); }
+      clearArea(spawnI-1,spawnJ-1,3,3); }
+    // reachability flood-fill from spawn across open edges
+    function floodFromSpawn(){ const seen=new Uint8Array(GRID*GRID), q=[[spawnI,spawnJ]]; seen[spawnI*GRID+spawnJ]=1;
+      while(q.length){ const c=q.pop(), i=c[0], j=c[1];
+        if(i<GRID-1 && !WV[i+1][j] && !seen[(i+1)*GRID+j]){ seen[(i+1)*GRID+j]=1; q.push([i+1,j]); }
+        if(i>0 && !WV[i][j] && !seen[(i-1)*GRID+j]){ seen[(i-1)*GRID+j]=1; q.push([i-1,j]); }
+        if(j<GRID-1 && !WH[i][j+1] && !seen[i*GRID+j+1]){ seen[i*GRID+j+1]=1; q.push([i,j+1]); }
+        if(j>0 && !WH[i][j] && !seen[i*GRID+j-1]){ seen[i*GRID+j-1]=1; q.push([i,j-1]); } }
+      return seen; }
+    // punch doorways until every cell is reachable from spawn — guarantees no trapped pockets/exits
+    function ensureConnected(){ for(let pass=0;pass<600;pass++){ const seen=floodFromSpawn(); let opened=false;
+      for(let i=0;i<GRID&&!opened;i++)for(let j=0;j<GRID;j++){ if(!seen[i*GRID+j])continue;
+        if(i<GRID-1&&WV[i+1][j]&&!seen[(i+1)*GRID+j]){ WV[i+1][j]=0; opened=true; break; }
+        if(i>0&&WV[i][j]&&!seen[(i-1)*GRID+j]){ WV[i][j]=0; opened=true; break; }
+        if(j<GRID-1&&WH[i][j+1]&&!seen[i*GRID+j+1]){ WH[i][j+1]=0; opened=true; break; }
+        if(j>0&&WH[i][j]&&!seen[i*GRID+j-1]){ WH[i][j]=0; opened=true; break; } }
+      if(!opened) break; } }
+    function buildOpenList(){ const seen=floodFromSpawn(); openList=[];
+      for(let i=0;i<GRID;i++)for(let j=0;j<GRID;j++){ if(seen[i*GRID+j]) openList.push([i,j]); }
+      if(openList.length<4){ openList=[]; for(let i=0;i<GRID;i++)for(let j=0;j<GRID;j++) openList.push([i,j]); } }
+
+    // turn the wall-edge grids into merged wall boxes (+ collision + base trim)
+    function buildWallMeshes(){
+      // horizontal walls (run along X)
+      for(let jb=0;jb<=GRID;jb++){ let i=0; while(i<GRID){ if(!WH[i][jb]){ i++; continue; } let i2=i; while(i2<GRID&&WH[i2][jb]) i2++;
+        const len=(i2-i)*CELL, cx=((i+i2)/2)*CELL-off, cz=jb*CELL-off;
+        const m=new THREE.Mesh(new THREE.BoxGeometry(len,WALL_H,WALL_T),wallMat); m.position.set(cx,WALL_H/2,cz); m.castShadow=m.receiveShadow=true; worldGroup.add(m);
+        const b=new THREE.Mesh(new THREE.BoxGeometry(len,0.16,WALL_T+0.06),baseMat); b.position.set(cx,0.08,cz); b.receiveShadow=true; worldGroup.add(b);
+        addAABB(cx-len/2,cx+len/2,cz-WALL_T/2,cz+WALL_T/2); i=i2; } }
+      // vertical walls (run along Z)
+      for(let ib=0;ib<=GRID;ib++){ let j=0; while(j<GRID){ if(!WV[ib][j]){ j++; continue; } let j2=j; while(j2<GRID&&WV[ib][j2]) j2++;
+        const len=(j2-j)*CELL, cx=ib*CELL-off, cz=((j+j2)/2)*CELL-off;
+        const m=new THREE.Mesh(new THREE.BoxGeometry(WALL_T,WALL_H,len),wallMat); m.position.set(cx,WALL_H/2,cz); m.castShadow=m.receiveShadow=true; worldGroup.add(m);
+        const b=new THREE.Mesh(new THREE.BoxGeometry(WALL_T+0.06,0.16,len),baseMat); b.position.set(cx,0.08,cz); b.receiveShadow=true; worldGroup.add(b);
+        addAABB(cx-WALL_T/2,cx+WALL_T/2,cz-len/2,cz+len/2); j=j2; } }
     }
     function buildWorld(lv){
       disposeWorld();
       const th=THEMES[lv]; WALL_H=th.wallH; levelHasBlackout=(lv===1);
-      computeGarages(lv);
       FOG.set(th.fog); scene.background.set(th.fog); scene.fog.color.set(th.fog); FOG_BASE=th.fogDensity; scene.fog.density=FOG_BASE; fogTarget=FOG_BASE;
       hemi.color.set(th.hemiSky); hemi.groundColor.set(th.hemiGnd); HEMI_BASE=th.hemiInt; hemi.intensity=HEMI_BASE;
       amb.color.set(th.ambColor); AMB_BASE=th.ambInt; amb.intensity=AMB_BASE;
@@ -661,23 +827,20 @@
       const span=GRID*CELL+4;
       floor=new THREE.Mesh(new THREE.PlaneGeometry(span,span),floorMat); floor.rotation.x=-Math.PI/2; worldGroup.add(floor);
       ceil=new THREE.Mesh(new THREE.PlaneGeometry(span,span),ceilMat); ceil.rotation.x=Math.PI/2; ceil.position.y=WALL_H; worldGroup.add(ceil);
-      // ----- maze: identical generation to Level 0, only the seed changes -----
+      // ----- per-level layout: each level uses its OWN generator -----
       __s=levelSeed(lv);
-      hWalls=[]; vWalls=[]; pillars=[]; aabbs=[];
-      for(let j=0;j<=GRID;j++) for(let i=0;i<GRID;i++){ const perim=(j===0||j===GRID); if(!perim){ if(nearStart(i,j))continue; if(lv===1 && cellGarage(i,j-1)&&cellGarage(i,j) && (((j-1)/SEC)|0)===((j/SEC)|0)) continue; if(srand()>WALL_P)continue; } const cx=(i+0.5)*CELL-off, cz=j*CELL-off; hWalls.push([cx,cz]); addAABB(cx-CELL/2,cx+CELL/2,cz-WALL_T/2,cz+WALL_T/2); }
-      for(let i=0;i<=GRID;i++) for(let j=0;j<GRID;j++){ const perim=(i===0||i===GRID); if(!perim){ if(nearStart(i,j))continue; if(lv===1 && cellGarage(i-1,j)&&cellGarage(i,j) && (((i-1)/SEC)|0)===((i/SEC)|0)) continue; if(srand()>WALL_P)continue; } const cx=i*CELL-off, cz=(j+0.5)*CELL-off; vWalls.push([cx,cz]); addAABB(cx-WALL_T/2,cx+WALL_T/2,cz-CELL/2,cz+CELL/2); }
-      for(let i=0;i<=GRID;i++) for(let j=0;j<=GRID;j++){ const cx=i*CELL-off, cz=j*CELL-off; pillars.push([cx,cz]); addAABB(cx-PILLAR/2,cx+PILLAR/2,cz-PILLAR/2,cz+PILLAR/2); }
-      const mhw=instAA(new THREE.BoxGeometry(CELL,WALL_H,WALL_T),wallMat,hWalls,WALL_H/2);
-      const mvw=instAA(new THREE.BoxGeometry(WALL_T,WALL_H,CELL),wallMat,vWalls,WALL_H/2);
-      const mpl=instAA(new THREE.BoxGeometry(PILLAR,WALL_H,PILLAR),pillarMat,pillars,WALL_H/2);
-      mhw.castShadow=mhw.receiveShadow=true; mvw.castShadow=mvw.receiveShadow=true; mpl.castShadow=mpl.receiveShadow=true;
-      instAA(new THREE.BoxGeometry(CELL,0.16,WALL_T+0.05),baseMat,hWalls,0.08);
-      instAA(new THREE.BoxGeometry(WALL_T+0.05,0.16,CELL),baseMat,vWalls,0.08);
-      instAA(new THREE.BoxGeometry(PILLAR+0.05,0.16,PILLAR+0.05),baseMat,pillars,0.08);
-      const fixGeo=new THREE.PlaneGeometry(2.5,0.95), glowGeo=new THREE.PlaneGeometry(3.4,1.7), NC=GRID*GRID;
+      aabbs=[]; gInit(); spawnI=GRID>>1; spawnJ=GRID>>1;
+      (GENERATORS[lv]||genLobby)();
+      clearSpawn(); ensureConnected(); buildOpenList();
+      spawnX=(spawnI+0.5)*CELL-off; spawnZ=(spawnJ+0.5)*CELL-off;
+      for(let i=0;i<GRID;i++)for(let j=0;j<GRID;j++) isGarageCell[i*GRID+j]=(cellType[i*GRID+j]===CT_GARAGE)?1:0;
+      buildWallMeshes();
+      // ceiling light fixtures only over reachable cells (skip sealed/solid)
+      let nOpen=0; for(let i=0;i<GRID;i++)for(let j=0;j<GRID;j++) if(cellType[i*GRID+j]!==CT_SOLID) nOpen++;
+      const fixGeo=new THREE.PlaneGeometry(2.5,0.95), glowGeo=new THREE.PlaneGeometry(3.4,1.7), NC=Math.max(1,nOpen);
       fixtures=new THREE.InstancedMesh(fixGeo,fixMat,NC); glows=new THREE.InstancedMesh(glowGeo,glowMat,NC);
-      let pk=0; for(let i=0;i<GRID;i++) for(let j=0;j<GRID;j++){ const cx=(i+0.5)*CELL-off, cz=(j+0.5)*CELL-off; M.makeRotationX(Math.PI/2); M.setPosition(cx,WALL_H-0.04,cz); fixtures.setMatrixAt(pk,M); M.makeRotationX(Math.PI/2); M.setPosition(cx,WALL_H-0.10,cz); glows.setMatrixAt(pk,M); pk++; }
-      fixtures.instanceMatrix.needsUpdate=true; glows.instanceMatrix.needsUpdate=true; worldGroup.add(fixtures); worldGroup.add(glows);
+      let pk=0; for(let i=0;i<GRID;i++) for(let j=0;j<GRID;j++){ if(cellType[i*GRID+j]===CT_SOLID) continue; const cx=(i+0.5)*CELL-off, cz=(j+0.5)*CELL-off; M.makeRotationX(Math.PI/2); M.setPosition(cx,WALL_H-0.04,cz); fixtures.setMatrixAt(pk,M); M.makeRotationX(Math.PI/2); M.setPosition(cx,WALL_H-0.10,cz); glows.setMatrixAt(pk,M); pk++; }
+      fixtures.count=pk; glows.count=pk; fixtures.instanceMatrix.needsUpdate=true; glows.instanceMatrix.needsUpdate=true; worldGroup.add(fixtures); worldGroup.add(glows);
       floor.receiveShadow=true;
       buildDecor(lv,th);          // props + garage features (adds collision AABBs)
       buckets=new Map();
@@ -804,6 +967,42 @@
       if(Math.random()<0.6){ const c=new THREE.Mesh(new THREE.CylinderGeometry(0.03,0.03,len,6),decor.cable); c.rotation.z=Math.PI/2; if(!horiz)c.rotation.y=Math.PI/2; c.position.set(cx+0.12,y-0.18,cz); worldGroup.add(c); propCount++; } }
     function buildEmerLight(cx,cz){ const b=new THREE.Mesh(new THREE.BoxGeometry(0.34,0.16,0.14),decor.redlight); b.position.set(cx,WALL_H-0.5,cz); worldGroup.add(b); propCount++; }
     function buildColumn(cx,cz){ solidBox(0.95,WALL_H,0.95,cx,WALL_H/2,cz,decor.pillar); }
+    // big industrial machine — transformer / generator block (L3) with hazard stripe + coils
+    function buildMachine(cx,cz,ry){ const g=new THREE.Group(); g.position.set(cx,0,cz); if(ry)g.rotation.y=ry; worldGroup.add(g); propCount+=4;
+      const body=new THREE.Mesh(new THREE.BoxGeometry(2.0,2.1,2.0),decor.metal); body.position.y=1.05; body.castShadow=body.receiveShadow=true; g.add(body);
+      const cap=new THREE.Mesh(new THREE.BoxGeometry(2.2,0.2,2.2),decor.dark); cap.position.y=2.2; g.add(cap);
+      for(const sx of [-0.55,0,0.55]){ const co=new THREE.Mesh(new THREE.CylinderGeometry(0.18,0.18,0.7,10),decor.rust); co.position.set(sx,2.5,0); co.castShadow=true; g.add(co); }
+      const stripe=new THREE.Mesh(new THREE.BoxGeometry(2.02,0.3,2.02),decor.hazard); stripe.position.y=0.4; g.add(stripe);
+      addAABB(cx-1.05,cx+1.05,cz-1.05,cz+1.05); }
+    // large pipe spanning a chamber (L2) — horizontal trunk + a valve wheel
+    function buildBigPipe(cx,cz,ry){ const g=new THREE.Group(); g.position.set(cx,0,cz); if(ry)g.rotation.y=ry; worldGroup.add(g); propCount+=3;
+      const r=0.45+Math.random()*0.35, y=0.6+Math.random()*1.4, len=CELL*1.6;
+      const p=new THREE.Mesh(new THREE.CylinderGeometry(r,r,len,14),decor.pipe); p.rotation.z=Math.PI/2; p.position.y=y; p.castShadow=p.receiveShadow=true; g.add(p);
+      const fl=new THREE.Mesh(new THREE.CylinderGeometry(r*1.25,r*1.25,0.18,14),decor.rust); fl.rotation.z=Math.PI/2; fl.position.set(0,y,0); g.add(fl);
+      const w=new THREE.Mesh(new THREE.TorusGeometry(0.32,0.07,8,16),decor.rust); w.position.set(0,y+r+0.3,0); g.add(w);
+      addAABB(cx-len/2,cx+len/2,cz-r,cz+r); }
+    function buildCrate(cx,cz,prnd){ const n=1+((prnd?prnd():Math.random())*3|0); for(let i=0;i<n;i++){ const s=0.6+Math.random()*0.5; solidBox(s,s,s,cx+(Math.random()-0.5)*2,(s/2)+(Math.random()<0.3?s:0),cz+(Math.random()-0.5)*2,Math.random()<0.5?decor.wood:decor.metal,Math.random()*6.28); } }
+    function buildShelf(cx,cz,ry){ const g=new THREE.Group(); g.position.set(cx,0,cz); if(ry)g.rotation.y=ry; worldGroup.add(g); propCount+=4;
+      for(const yy of [0.4,1.0,1.6]){ const sh=new THREE.Mesh(new THREE.BoxGeometry(1.6,0.05,0.5),decor.metal); sh.position.y=yy; sh.castShadow=true; g.add(sh);
+        if(Math.random()<0.7){ const bx=new THREE.Mesh(new THREE.BoxGeometry(0.4,0.3,0.4),decor.wood); bx.position.set((Math.random()-0.5),yy+0.18,0); g.add(bx); } }
+      addAABB(cx-0.85,cx+0.85,cz-0.3,cz+0.3); }
+    function buildCubicle(cx,cz,prnd){ const g=new THREE.Group(); g.position.set(cx,0,cz); worldGroup.add(g); propCount+=4;
+      const ph=1.25, pm=decor.fabric;
+      const a=new THREE.Mesh(new THREE.BoxGeometry(2.6,ph,0.08),pm); a.position.set(0,ph/2,-1.3); a.receiveShadow=true; g.add(a);
+      const b=new THREE.Mesh(new THREE.BoxGeometry(0.08,ph,2.6),pm); b.position.set(-1.3,ph/2,0); b.receiveShadow=true; g.add(b);
+      const desk=new THREE.Mesh(new THREE.BoxGeometry(1.5,0.06,0.7),decor.wood); desk.position.set(-0.5,0.74,-0.9); desk.receiveShadow=true; g.add(desk);
+      if((prnd?prnd():Math.random())<0.6){ const mon=new THREE.Mesh(new THREE.BoxGeometry(0.5,0.34,0.05),decor.dark); mon.position.set(-0.5,1.05,-1.1); g.add(mon); }
+      addAABB(cx-1.34,cx+0.05,cz-1.34,cz+0.05); addAABB(cx-1.34,cx+1.34,cz-1.34,cz-1.26); }
+    function buildServerRack(cx,cz,ry){ const g=new THREE.Group(); g.position.set(cx,0,cz); if(ry)g.rotation.y=ry; worldGroup.add(g); propCount+=3;
+      const box=new THREE.Mesh(new THREE.BoxGeometry(0.7,2.0,1.0),decor.dark); box.position.y=1.0; box.castShadow=box.receiveShadow=true; g.add(box);
+      const led=new THREE.Mesh(new THREE.PlaneGeometry(0.6,1.8),decor.led); led.position.set(0,1.0,0.51); g.add(led);
+      addAABB(cx-0.4,cx+0.4,cz-0.55,cz+0.55); }
+    function buildConsole(cx,cz,ry){ const g=new THREE.Group(); g.position.set(cx,0,cz); if(ry)g.rotation.y=ry; worldGroup.add(g); propCount+=3;
+      const desk=new THREE.Mesh(new THREE.BoxGeometry(2.2,0.9,0.8),decor.metal); desk.position.y=0.45; desk.castShadow=desk.receiveShadow=true; g.add(desk);
+      const panel=new THREE.Mesh(new THREE.PlaneGeometry(2.0,0.5),decor.led); panel.position.set(0,0.95,0.3); panel.rotation.x=-0.5; g.add(panel);
+      addAABB(cx-1.1,cx+1.1,cz-0.4,cz+0.4); }
+    function buildTable(cx,cz){ const t=new THREE.Mesh(new THREE.BoxGeometry(3.0,0.1,1.3),decor.wood); t.position.set(cx,0.74,cz); t.castShadow=t.receiveShadow=true; worldGroup.add(t); propCount++;
+      addAABB(cx-1.5,cx+1.5,cz-0.65,cz+0.65); for(let k=0;k<6;k++){ const a=k/6*6.28; const ch=new THREE.Mesh(new THREE.BoxGeometry(0.45,0.5,0.45),decor.fabric); ch.position.set(cx+Math.cos(a)*2.0,0.45,cz+Math.sin(a)*1.2); worldGroup.add(ch); propCount++; } }
 
     function buildDecor(lv,th){
       propCount=0;
@@ -821,6 +1020,8 @@
         fabric:trackMat(new THREE.MeshLambertMaterial({color:0x3a4048})),
         paper:trackMat(new THREE.MeshLambertMaterial({color:0xcfcbbb})),
         redlight:trackMat(new THREE.MeshBasicMaterial({color:0xff2a20})),
+        hazard:trackMat(new THREE.MeshBasicMaterial({map:paintTex(64,16,function(x,w,h){ for(let k=-h;k<w;k+=10){ x.fillStyle=((k/10|0)%2)?"#161208":"#c8a82a"; x.beginPath(); x.moveTo(k,0); x.lineTo(k+h,0); x.lineTo(k+h+8,h); x.lineTo(k+8,h); x.closePath(); x.fill(); } })})),
+        led:trackMat(new THREE.MeshBasicMaterial({map:paintTex(32,64,function(x,w,h){ x.fillStyle="#06120a"; x.fillRect(0,0,w,h); for(let yy=4;yy<h;yy+=7){ x.fillStyle=Math.random()<0.6?"#27d07a":(Math.random()<0.5?"#d0b327":"#0a3018"); x.fillRect(4,yy,5,4); x.fillRect(12,yy,5,4); } }),color:0xffffff})),
         car:[trackMat(new THREE.MeshLambertMaterial({color:0x5b3a36})),trackMat(new THREE.MeshLambertMaterial({color:0x394451})),trackMat(new THREE.MeshLambertMaterial({color:0x6b6256})),trackMat(new THREE.MeshLambertMaterial({color:0x4a4a44}))],
         oilMat:trackMat(new THREE.MeshBasicMaterial({map:trackTex(radialTex(10,10,14,0.55)),transparent:true,depthWrite:false})),
         bayMat:trackMat(new THREE.MeshBasicMaterial({map:paintTex(128,128,function(x,w,h){ x.clearRect(0,0,w,h); x.strokeStyle="rgba(200,185,90,0.8)"; x.lineWidth=5; x.beginPath(); x.moveTo(8,4); x.lineTo(8,h-4); x.moveTo(w-8,4); x.lineTo(w-8,h-4); x.moveTo(8,h-6); x.lineTo(w-8,h-6); x.stroke(); }),transparent:true,depthWrite:false})),
@@ -833,33 +1034,66 @@
       const prnd=(function(){ let s=(levelSeed(lv)^0x00C0FFEE)>>>0; if(!s)s=1; return function(){ s|=0; s=s+0x6D2B79F5|0; let t=Math.imul(s^s>>>15,1|s); t=t+Math.imul(t^t>>>7,61|t)^t; return ((t^t>>>14)>>>0)/4294967296; }; })();
       for(let ci=0;ci<GRID;ci++) for(let cj=0;cj<GRID;cj++){
         if(nearStart(ci,cj)) continue;
+        const t=cellType[ci*GRID+cj]; if(t===CT_SOLID) continue;
         const cx=(ci+0.5)*CELL-off, cz=(cj+0.5)*CELL-off;
-        if(lv===1 && cellGarage(ci,cj)){
-          // ----- parking garage section -----
-          if(ci%3===0 && cj%3===0) buildColumn(ci*CELL-off, cj*CELL-off);   // fat columns on a sub-grid
-          if(prnd()<0.45) decal(decor.bayMat,cx,cz,CELL*0.9,CELL*0.9);       // parking bay markings
-          if(prnd()<0.20) buildVehicle(cx+(prnd()-0.5)*1.2,cz+(prnd()-0.5)*1.2,prnd()*6.28,prnd);
-          if(prnd()<0.13) buildBarrier(cx+(prnd()-0.5)*2,cz+(prnd()-0.5)*2,prnd()<0.5?0:Math.PI/2);
-          if(prnd()<0.18) decal(decor.oilMat,cx+(prnd()-0.5)*3,cz+(prnd()-0.5)*3,1.2+prnd()*1.8,1.2+prnd()*1.8);
-          if(prnd()<0.10) decal(decor.arrowMat,cx,cz,1.4,1.4,prnd()*6.28);
-          if(prnd()<0.16) buildEmerLight(ci*CELL-off,cz);
-          if(ci%SEC===3 && cj%SEC===3 && prnd()<0.6) buildBooth(cx,cz,prnd()*6.28);
-        } else if(lv===1){
-          // ----- maintenance hall -----
-          if(prnd()<0.3) buildPipes(cx,cz);
-          if(prnd()<0.12) buildCabinet(cx+(prnd()-0.5)*3,cz+(prnd()-0.5)*3,prnd()<0.5?0:Math.PI/2);
-          if(prnd()<0.09) buildCart(cx+(prnd()-0.5)*2,cz+(prnd()-0.5)*2,prnd()*6.28);
-          if(prnd()<0.07) buildSign(cx+(prnd()-0.5)*2.5,cz+(prnd()-0.5)*2.5,prnd()*6.28);
-          if(prnd()<0.16) buildEmerLight(cx,cz);
-          if(prnd()<0.05) buildTrash(cx,cz);
-        } else {
-          // ----- other levels: light environmental clutter (kept sparse to preserve their feel) -----
-          if(prnd()<0.022) buildDeskChair(cx+(prnd()-0.5)*2,cz+(prnd()-0.5)*2,prnd()*6.28);
-          if(prnd()<0.015) buildCabinet(cx+(prnd()-0.5)*3,cz+(prnd()-0.5)*3,prnd()*6.28);
-          if(prnd()<0.025) buildTrash(cx,cz);
-          if(prnd()<0.02) buildSign(cx+(prnd()-0.5)*2.5,cz+(prnd()-0.5)*2.5,prnd()*6.28);
-          if(prnd()<0.015) buildCart(cx+(prnd()-0.5)*2,cz+(prnd()-0.5)*2,prnd()*6.28);
+        switch(t){
+          case CT_GARAGE:
+            if(ci%3===0 && cj%3===0) buildColumn(ci*CELL-off, cj*CELL-off);
+            if(prnd()<0.4) decal(decor.bayMat,cx,cz,CELL*0.9,CELL*0.9);
+            if(prnd()<0.18) buildVehicle(cx+(prnd()-0.5)*1.2,cz+(prnd()-0.5)*1.2,prnd()*6.28,prnd);
+            if(prnd()<0.12) buildBarrier(cx+(prnd()-0.5)*2,cz+(prnd()-0.5)*2,prnd()<0.5?0:Math.PI/2);
+            if(prnd()<0.18) decal(decor.oilMat,cx+(prnd()-0.5)*3,cz+(prnd()-0.5)*3,1.2+prnd()*1.8,1.2+prnd()*1.8);
+            if(prnd()<0.10) decal(decor.arrowMat,cx,cz,1.4,1.4,prnd()*6.28);
+            if(prnd()<0.14) buildEmerLight(ci*CELL-off,cz);
+            break;
+          case CT_CORRIDOR: case CT_HALL:
+            if(prnd()<0.26) buildPipes(cx,cz);
+            if(prnd()<0.10) buildCabinet(cx+(prnd()-0.5)*3,cz+(prnd()-0.5)*3,prnd()<0.5?0:Math.PI/2);
+            if(prnd()<0.07) buildCart(cx+(prnd()-0.5)*2,cz+(prnd()-0.5)*2,prnd()*6.28);
+            if(prnd()<0.06) buildSign(cx+(prnd()-0.5)*2.5,cz+(prnd()-0.5)*2.5,prnd()*6.28);
+            if(prnd()<0.14) buildEmerLight(cx,cz);
+            if(prnd()<0.05) buildTrash(cx,cz);
+            break;
+          case CT_STORAGE:
+            if(prnd()<0.45) buildShelf(cx+(prnd()-0.5)*1.5,cz+(prnd()-0.5)*1.5,prnd()<0.5?0:Math.PI/2);
+            if(prnd()<0.4) buildCrate(cx,cz,prnd);
+            if(prnd()<0.2) buildCart(cx,cz,prnd()*6.28);
+            break;
+          case CT_CHAMBER:
+            if(prnd()<0.5) buildBigPipe(cx,cz,prnd()<0.5?0:Math.PI/2);
+            if(prnd()<0.10) buildColumn(ci*CELL-off,cj*CELL-off);
+            if(prnd()<0.12) buildMachine(cx,cz,prnd()*6.28);
+            if(prnd()<0.20) decal(decor.oilMat,cx+(prnd()-0.5)*3,cz+(prnd()-0.5)*3,1.5+prnd()*2,1.5+prnd()*2);
+            break;
+          case CT_MACHINE:
+            if(lv===4){ if(prnd()<0.6) buildServerRack(cx+(prnd()-0.5)*2,cz+(prnd()-0.5)*2,prnd()<0.5?0:Math.PI/2); }
+            else { if(prnd()<0.5) buildMachine(cx,cz,prnd()*6.28); if(prnd()<0.2) buildConsole(cx,cz,prnd()*6.28); }
+            if(prnd()<0.12) buildSign(cx+(prnd()-0.5)*2,cz+(prnd()-0.5)*2,prnd()*6.28);
+            break;
+          case CT_CUBICLE:
+            if(prnd()<0.42) buildCubicle(cx,cz,prnd);
+            if(prnd()<0.05) buildTrash(cx,cz);
+            break;
+          case CT_OFFICE: case CT_ROOM:
+            if(prnd()<0.22) buildDeskChair(cx+(prnd()-0.5)*1.5,cz+(prnd()-0.5)*1.5,prnd()*6.28);
+            if(prnd()<0.12) buildCabinet(cx+(prnd()-0.5)*2,cz+(prnd()-0.5)*2,prnd()*6.28);
+            if(prnd()<0.08) buildTrash(cx,cz);
+            if(prnd()<0.05) buildSign(cx,cz,prnd()*6.28);
+            break;
+          case CT_SPECIAL:
+            buildTable(cx,cz);   // conference / meeting landmark
+            break;
+          default: // CT_LOBBY — keep the liminal emptiness; only the rare stray object
+            if(prnd()<0.03) buildTrash(cx,cz);
+            if(prnd()<0.012) buildDeskChair(cx+(prnd()-0.5)*2,cz+(prnd()-0.5)*2,prnd()*6.28);
+            if(prnd()<0.012) buildSign(cx+(prnd()-0.5)*2,cz+(prnd()-0.5)*2,prnd()*6.28);
         }
+      }
+      // landmark furniture (security booths at garage checkpoints, etc.)
+      for(const lm of landmarks){ const lx=(lm.i+0.5)*CELL-off, lz=(lm.j+0.5)*CELL-off;
+        if(lm.type==="checkpoint") buildBooth(lx,lz,0);
+        else if(lm.type==="control") buildConsole(lx,lz,0);
+        else if(lm.type==="conference") buildTable(lx,lz);
       }
     }
 
@@ -907,10 +1141,11 @@
     function spawnSmilers(){
       const pc=playerCell(), inG=cellGarage(pc[0],pc[1]);
       const want=inG?(4+((Math.random()*5)|0)):(1+((Math.random()*2)|0));
-      let placed=0,tries=0;
-      while(placed<want && tries<240){ tries++;
-        const ci=(Math.random()*GRID)|0, cj=(Math.random()*GRID)|0, cx=(ci+0.5)*CELL-off, cz=(cj+0.5)*CELL-off, d=Math.hypot(cx-px,cz-pz);
-        if(d<10||d>34) continue;
+      const pool=openList.length?openList:null; let placed=0,tries=0;
+      while(placed<want && tries<300){ tries++;
+        let ci,cj; if(pool){ const c=pool[(Math.random()*pool.length)|0]; ci=c[0]; cj=c[1]; } else { ci=(Math.random()*GRID)|0; cj=(Math.random()*GRID)|0; }
+        const cx=(ci+0.5)*CELL-off, cz=(cj+0.5)*CELL-off, d=Math.hypot(cx-px,cz-pz);
+        if(d<9||d>34) continue;
         const r=collide(cx,cz,0.4); if(Math.hypot(r[0]-cx,r[1]-cz)>0.25) continue;
         createSmiler(cx,cz); placed++;
       }
@@ -947,7 +1182,7 @@
       blackout.active=true; blackout.phase="onset"; blackout.t=0; blackout.dur=20+Math.random()*30; blackout.alarmT=2.5;
       if(audioCtx&&humGain){ const t=audioCtx.currentTime; humGain.gain.cancelScheduledValues(t); humGain.gain.setValueAtTime(humGain.gain.value,t); humGain.gain.linearRampToValueAtTime(0.0001,t+1.6); }
       if(buzzGain){ buzzGain.gain.value=0.0; }
-      fogTarget=Math.min(0.12,FOG_BASE+0.05); sAlarm();
+      fogTarget=FOG_BASE*0.55; sAlarm();   // thinner air so the flashlight beam reaches into the dark
       setTimeout(function(){ if(blackout.active&&blackout.phase!=="restore") spawnSmilers(); },1400);
     }
     function endBlackout(){
@@ -1026,14 +1261,16 @@
 
     function angDiff(a,b){ let d=a-b; while(d>Math.PI)d-=2*Math.PI; while(d<-Math.PI)d+=2*Math.PI; return d; }
     function findCell(minD,maxD,unobs){
-      const fx=-Math.sin(yaw), fz=-Math.cos(yaw);
-      for(let t=0;t<70;t++){
-        const ci=Math.floor(Math.random()*GRID), cj=Math.floor(Math.random()*GRID);
+      const fx=-Math.sin(yaw), fz=-Math.cos(yaw), pool=openList.length?openList:null;
+      for(let t=0;t<90;t++){
+        let ci,cj; if(pool){ const c=pool[(Math.random()*pool.length)|0]; ci=c[0]; cj=c[1]; } else { ci=Math.floor(Math.random()*GRID); cj=Math.floor(Math.random()*GRID); }
         const cx=(ci+0.5)*CELL-off, cz=(cj+0.5)*CELL-off, d=Math.hypot(cx-px,cz-pz);
         if(d<minD||d>maxD)continue;
         if(unobs){ const dot=(fx*(cx-px)+fz*(cz-pz))/d; if(dot>Math.cos(1.05))continue; }
+        const r=collide(cx,cz,0.4); if(Math.hypot(r[0]-cx,r[1]-cz)>0.3)continue;   // open floor only
         return [cx,cz];
       }
+      if(pool){ const c=pool[(Math.random()*pool.length)|0]; return [(c[0]+0.5)*CELL-off,(c[1]+0.5)*CELL-off]; }
       return [(Math.floor(Math.random()*GRID)+0.5)*CELL-off,(Math.floor(Math.random()*GRID)+0.5)*CELL-off];
     }
     function placeEntity(minD,maxD,unobs){ const c=findCell(minD,maxD,unobs); ex=c[0]; ez=c[1]; eYaw=Math.atan2(px-ex,pz-ez); }
@@ -1254,15 +1491,18 @@
     function updateFlicker(dt){
       // fog easing
       scene.fog.density+=(fogTarget-scene.fog.density)*Math.min(1,dt*1.5);
-      // long Level-1 power blackout: kill the mains, raise pulsing emergency red
+      // power blackout: the mains die almost completely — near pitch-black, only a faint
+      // emergency glow. The player must rely on the flashlight. Darkness IS the threat.
       if(blackout.active){
         let mainK,emerK;
         if(blackout.phase==="onset"){ const p=Math.min(1,blackout.t/1.5); mainK=1-p; emerK=p; }
         else if(blackout.phase==="restore"){ const p=Math.min(1,blackout.t/3); mainK=p; emerK=1-p; }
-        else { mainK=Math.random()<0.06?0.05:0.0; emerK=0.8+0.2*Math.sin(performance.now()*0.006); }
+        else { mainK=Math.random()<0.04?0.02:0.0; emerK=1; }                 // dark: mains OFF
         hemi.intensity=HEMI_BASE*mainK; amb.intensity=AMB_BASE*mainK;
-        emer.intensity=1.5*emerK; fixMat.color.setRGB(0.45*mainK+0.22*emerK,0.06*mainK,0.05*mainK);
-        adaptTarget=0;   // emergency red carries the dark; no neutral fill during a blackout
+        // emergency lighting is sparse + dim: a low steady red wash, not a strobe
+        emer.intensity=(0.10+0.05*Math.sin(performance.now()*0.0022))*emerK;
+        fixMat.color.setRGB(0.30*mainK+0.05*emerK,0.05*mainK,0.04*mainK);
+        adaptTarget=0.06*emerK;   // eyes barely adjust; still need the torch
         return;
       }
       emer.intensity=0;
