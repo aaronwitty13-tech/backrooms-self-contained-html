@@ -189,8 +189,9 @@
     <div class="eyebrow">FOUND-FOOTAGE CO-OP &nbsp;&bull;&nbsp; UP TO 8 CAMS</div>
     <div class="title">THE BACKROOMS</div>
     <div id="lbHome">
+      <div class="lbBtns"><button id="lbSolo" class="lbBtn">PLAY SOLO</button></div>
       <div class="lbBtns"><button id="lbCreate" class="lbBtn">CREATE ROOM</button><button id="lbJoin" class="lbBtn">JOIN ROOM</button></div>
-      <div class="sub">Share a room code. Each player becomes a camera &mdash; CAM 01 through CAM 08. One level, one monster. Stay together.</div>
+      <div class="sub">Play alone, or share a room code &mdash; each player becomes a camera, CAM 01 through CAM 08. One level, one monster. Stay together.</div>
     </div>
     <div id="lbRoom" style="display:none">
       <div class="lbLabel" id="lbRoomLabel">ROOM CODE</div>
@@ -1927,6 +1928,9 @@
     let peer=null, launched=false;
     function broadcast(m){ for(let i=0;i<net._conns.length;i++){ const c=net._conns[i]; if(c.open)c.send(m); } }
     function launch(){ if(launched)return; launched=true; lobby.style.display="none"; boot(hashCode(net.code), net.myCam, net); }
+
+    // ---- SOLO (no networking: just a host with no peers) ----
+    $("lbSolo").onclick=function(){ net.isHost=true; net.myCam=1; net.roster=[1]; net.code=genCode(); launch(); };
 
     // ---- HOST ----
     $("lbCreate").onclick=function(){

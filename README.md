@@ -81,11 +81,12 @@ rift to descend.
 - **Phone:** left half of the screen moves, right half looks
 - Don't let it touch you. Don't stare too long.
 
-## Co-op
+## Playing
 
-Create a room to get a code, share it (up to 8 cameras), then start. The host is
-authoritative for the monster and for level progression — when anyone steps into
-an exit, the whole group descends together.
+- **Play Solo** — jump straight in, alone. No room code, no networking.
+- **Co-op** — create a room to get a code, share it (up to 8 cameras), then start.
+  The host is authoritative for the monster and for level progression — when
+  anyone steps into an exit, the whole group descends together.
 
 ## Admin / playtest mode
 
