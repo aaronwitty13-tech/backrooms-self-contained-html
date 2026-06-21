@@ -9,40 +9,50 @@ audio) lives inside **`index.html`** — just open it in a browser. No build ste
 
 ## Levels
 
-The procedurally-generated maze is unchanged — same huge, sprawling layout — but
-there are now **five descending levels**, each with its own surfaces, lighting,
-fog and atmosphere:
+Each of the **five descending levels has its own generator** — different layout
+logic, scale, navigation and landmarks — not one maze with reskins. Every cell is
+guaranteed reachable (a flood-fill repair pass punches doorways), so you can never
+be trapped and exits are always findable.
 
-| # | Name | Look |
-|---|------|------|
-| 0 | The Lobby | Classic yellow wallpaper, damp carpet, buzzing fluorescents |
-| 1 | Habitable Zone | Weathered concrete + **parking-garage** sections, blackouts |
-| 2 | Pipe Dreams | Low, dark maintenance tunnels with pipework |
-| 3 | Electrical Station | Riveted metal panels, hazard lines |
-| 4 | Abandoned Office | Bright drywall + commercial carpet |
+| # | Name | Generation & feel |
+|---|------|-------------------|
+| 0 | The Lobby | Open liminal office — scattered partition rooms, free-standing dividers, dead-ends, the odd impossible pocket. Sparse and confusing. |
+| 1 | Habitable Zone | Maintenance complex — open service floor cut into aisles, parking garages, storage/utility rooms, a security checkpoint. |
+| 2 | Pipe Dreams | Huge wide-mouthed pipe chambers joined by open walkways; big pipe runs and machinery as obstacles. Tall, vertical. |
+| 3 | Electrical Station | Maintenance floor between large generator/transformer rooms and a control room; industrial equipment. |
+| 4 | Abandoned Office | Realistic plan — a perimeter ring of offices/conference/break/server rooms around a central cubicle farm. |
 
 Reach a level's exit and you drop to the next; after Level 4 it loops back to 0.
 
-## Level 1 — Habitable Zone
+## Environmental storytelling
 
-The maze generator is unchanged, but Level 1 now layers two kinds of section over
-it (~25% become parking garages, the rest stay maintenance halls):
+Decor is placed by region, so areas read as real places: parking bays, abandoned
+vehicles and barriers in garages; overhead pipes, cabinets and carts in
+maintenance halls; shelving and crates in storage; big pipe runs and machinery in
+chambers; transformers/consoles in the power station; cubicles, conference tables
+and server racks in the office. Landmarks (security checkpoints, control rooms,
+conference rooms) anchor each level.
 
-- **Parking garages** — open bays with fat concrete columns, painted parking
-  lines and exit arrows, abandoned vehicles, concrete barriers, a security
-  booth, emergency lights and oil stains. Long sightlines, tall ceilings.
-- **Maintenance halls** — overhead pipes and cable runs, electrical cabinets,
-  utility carts, warning signs and emergency lights.
+## Blackouts & Smilers (Level 1)
 
-### Blackouts & Smilers
+Every so often the power cuts for **20–50 seconds**. This is a real blackout: the
+mains drop to **near pitch-black** with only a faint, sparse emergency glow — no
+strobe. Visibility collapses and the **flashlight becomes essential**. An alarm
+wails and **Smilers** appear — glowing eyes that drift toward you, blinking and
+breathing, and turn *more* aggressive the longer you stare. Tight halls spawn 1–2;
+open garages spawn 4–8. Hold the torch beam on one to kill it. When the lights
+return, any survivors melt away.
 
-Every so often the power cuts for **20–50 seconds**: the mains die, pulsing red
-emergency lighting kicks in, the hum stops, an alarm wails, and **Smilers** appear
-— glowing eyes in the dark that drift toward you, blinking and breathing, and get
-*more* aggressive the longer you stare. Tight halls spawn 1–2; open garages spawn
-4–8. When the lights come back, any survivors melt away.
+## Dynamic ambience
 
-### Flashlight (press **F**)
+Ambient sound is **positional** — layers (ventilation, steam, rushing water,
+machine rumble, transformer hum, fluorescent/HVAC) crossfade as you move between
+area types, with one-shots (drips, metal groans, structural creaks, electrical
+crackle) weighted per zone. A garage echoes and drips; a pipe chamber hisses with
+steam; the power station hums and sparks; the office buzzes. The dark goes quiet
+and eerie during a blackout.
+
+## Flashlight (press **F**)
 
 A camera-mounted spotlight with real shadows — and your primary weapon. Hold the
 beam **directly on a Smiler** to damage it: its eyes flicker, it screams, and it
