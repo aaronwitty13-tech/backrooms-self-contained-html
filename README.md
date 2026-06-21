@@ -67,10 +67,12 @@ a gentle eye-adaptation fill when you linger in the dark.
 
 ## Exits
 
-Each level spawns **2–3 exits** as glowing rifts, placed randomly far from where
-you start (deterministic per room code, so co-op players agree). A light pillar
-rises above the walls to guide you, and the HUD shows the nearest anomaly's
-distance and direction. Walk into a rift to descend.
+Each level spawns **3–5 exits** as glowing rifts, placed at the far reaches of
+the map — typically **~190–280m from where you start** (deterministic per room
+code, so co-op players agree). There's **no direction marker**: you have to
+explore and find them. A tall light pillar rises from each rift, so once you're
+close enough it shows through the fog to guide your final approach. Walk into a
+rift to descend.
 
 ## Controls
 

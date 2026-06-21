@@ -216,7 +216,7 @@
     // ===== constants =====
     // NOTE: CELL/GRID/WALL_P drive the procedural maze — intentionally left untouched so the
     // world keeps its huge, sprawling feel. Only cosmetic values vary per level.
-    const CELL=7, GRID=36, WALL_T=0.18, PILLAR=0.55;
+    const CELL=7, GRID=48, WALL_T=0.18, PILLAR=0.55;   // 48*7 = 336m across, so exits can sit ~190-260m out
     let WALL_H=3.0;                                  // per-level ceiling height (cosmetic only)
     const off=GRID*CELL/2;
     const EYE=1.62, R=0.34, WALK=3.3, RUN=5.6, WALL_P=0.42;
@@ -612,19 +612,25 @@
     }
     function buildExits(lv,th){
       exits=[];
-      const minD=GRID*CELL*0.32, spacing=GRID*CELL*0.26, n=2+(srand()<0.5?1:0), placed=[];
       const pool=openList.length?openList:[[spawnI,spawnJ]];
+      // how far is the farthest reachable cell from spawn? place exits out near that range.
+      let dmax=1; for(const c of pool){ const d=Math.hypot((c[0]+0.5)*CELL-off-spawnX,(c[1]+0.5)*CELL-off-spawnZ); if(d>dmax)dmax=d; }
+      const minD=dmax*0.78, spacing=GRID*CELL*0.20, n=3+(srand()*3|0), placed=[];   // 3–5 exits, all far out
       for(let e=0;e<n;e++){
-        let bx=0,bz=0,ok=false;
-        for(let t=0;t<300;t++){
-          const c=pool[(srand()*pool.length)|0]; const cx=(c[0]+0.5)*CELL-off, cz=(c[1]+0.5)*CELL-off;
+        let bx=null,bz=null;
+        for(let t=0;t<500;t++){
+          const c=pool[(srand()*pool.length)|0], cx=(c[0]+0.5)*CELL-off, cz=(c[1]+0.5)*CELL-off;
           if(Math.hypot(cx-spawnX,cz-spawnZ)<minD) continue;
           let far=true; for(const p of placed){ if(Math.hypot(cx-p[0],cz-p[1])<spacing){ far=false; break; } }
           if(!far) continue;
-          const r=collide(cx,cz,0.5); if(Math.hypot(r[0]-cx,r[1]-cz)>0.3) continue;   // must be open floor
-          bx=cx; bz=cz; ok=true; break;
+          const r=collide(cx,cz,0.5); if(Math.hypot(r[0]-cx,r[1]-cz)>0.3) continue;   // open floor only
+          bx=cx; bz=cz; break;
         }
-        if(!ok){ const c=pool[(srand()*pool.length)|0]; bx=(c[0]+0.5)*CELL-off; bz=(c[1]+0.5)*CELL-off; }
+        if(bx===null){ // relax: take the farthest well-spaced cell we can find
+          let bd=-1; for(let t=0;t<500;t++){ const c=pool[(srand()*pool.length)|0], cx=(c[0]+0.5)*CELL-off, cz=(c[1]+0.5)*CELL-off;
+            let far=true; for(const p of placed){ if(Math.hypot(cx-p[0],cz-p[1])<spacing){ far=false; break; } } if(!far)continue;
+            const d=Math.hypot(cx-spawnX,cz-spawnZ); if(d>bd){ bd=d; bx=cx; bz=cz; } }
+          if(bx===null){ const c=pool[(srand()*pool.length)|0]; bx=(c[0]+0.5)*CELL-off; bz=(c[1]+0.5)*CELL-off; } }
         placed.push([bx,bz]); exits.push(makeExit(bx,bz,th));
       }
     }
@@ -887,26 +893,15 @@
     function hostAdvance(){ if(transitioning) return; goToLevel(level+1); }
     function reachExit(){ if(exitLatch||transitioning) return; exitLatch=true; if(NET&&NET.isHost) hostAdvance(); else if(NET&&NET.sendReachExit) NET.sendReachExit(); }
     function updateExits(dt){
-      if(!exits||!exits.length){ if(exitHud)exitHud.style.opacity="0"; return; }
-      const tt=performance.now()*0.001, fdx=-Math.sin(yaw),fdz=-Math.cos(yaw), rdx=-fdz,rdz=fdx;
-      let nd=1e9,nex=0,nez=0;
+      if(!exits||!exits.length) return;
+      const tt=performance.now()*0.001;
       for(const ex of exits){
         const pulse=0.6+0.4*Math.sin(tt*2.2+ex.ph);
         ex.rift.opacity=0.35+0.45*pulse; ex.rift1.scale.y=1+0.05*Math.sin(tt*3+ex.ph);
         if(ex.light) ex.light.intensity=ex.baseInt*(0.7+0.5*pulse);
         if(ex.ring) ex.ring.material.opacity=0.4+0.3*pulse;
-        const d=Math.hypot(px-ex.x,pz-ex.z);
-        if(d<nd){ nd=d; nex=ex.x-px; nez=ex.z-pz; }
-        if(started&&!transitioning&&d<1.6) reachExit();
+        if(started&&!transitioning && Math.hypot(px-ex.x,pz-ex.z)<1.7) reachExit();
       }
-      if(started&&!transitioning){
-        exitHud.style.opacity="0.62";
-        const inv=1/Math.max(0.001,nd), ex2=nex*inv, ez2=nez*inv;
-        const rel=Math.atan2(ex2*rdx+ez2*rdz, ex2*fdx+ez2*fdz);
-        const arrows=["&uarr;","&nearr;","&rarr;","&searr;","&darr;","&swarr;","&larr;","&nwarr;"];
-        const idx=((Math.round(rel/(Math.PI/4))%8)+8)%8;
-        exitHud.innerHTML="ANOMALY&nbsp;&middot;&nbsp;<b>"+Math.round(nd)+"m</b>&nbsp;"+arrows[idx];
-      } else exitHud.style.opacity="0";
     }
     if(NET){ NET.levelCb=function(lv){ if(!NET.isHost && lv!==level && !transitioning) goToLevel(lv); }; NET.exitReachedCb=function(){ if(NET.isHost) hostAdvance(); }; }
     let vx=0,vz=0, yaw=0,pitch=0, bobPhase=0,bobAmp=0;
@@ -1032,6 +1027,8 @@
            body:trackGeo(new THREE.CylinderGeometry(0.26,0.46,2.0,8)), halo:trackGeo(new THREE.PlaneGeometry(2.6,3.2)),
            distTex:trackTex(radialTex(255,40,30,0.5)) };
       const prnd=(function(){ let s=(levelSeed(lv)^0x00C0FFEE)>>>0; if(!s)s=1; return function(){ s|=0; s=s+0x6D2B79F5|0; let t=Math.imul(s^s>>>15,1|s); t=t+Math.imul(t^t>>>7,61|t)^t; return ((t^t>>>14)>>>0)/4294967296; }; })();
+      // density scales inversely with map area → bigger world stays just as cheap (and feels more sprawling)
+      const decorScale=Math.max(0.4,Math.min(1,1300/(GRID*GRID))), roll=function(p){ return prnd()<p*decorScale; };
       for(let ci=0;ci<GRID;ci++) for(let cj=0;cj<GRID;cj++){
         if(nearStart(ci,cj)) continue;
         const t=cellType[ci*GRID+cj]; if(t===CT_SOLID) continue;
@@ -1039,54 +1036,54 @@
         switch(t){
           case CT_GARAGE:
             if(ci%3===0 && cj%3===0) buildColumn(ci*CELL-off, cj*CELL-off);
-            if(prnd()<0.4) decal(decor.bayMat,cx,cz,CELL*0.9,CELL*0.9);
-            if(prnd()<0.18) buildVehicle(cx+(prnd()-0.5)*1.2,cz+(prnd()-0.5)*1.2,prnd()*6.28,prnd);
-            if(prnd()<0.12) buildBarrier(cx+(prnd()-0.5)*2,cz+(prnd()-0.5)*2,prnd()<0.5?0:Math.PI/2);
-            if(prnd()<0.18) decal(decor.oilMat,cx+(prnd()-0.5)*3,cz+(prnd()-0.5)*3,1.2+prnd()*1.8,1.2+prnd()*1.8);
-            if(prnd()<0.10) decal(decor.arrowMat,cx,cz,1.4,1.4,prnd()*6.28);
-            if(prnd()<0.14) buildEmerLight(ci*CELL-off,cz);
+            if(roll(0.4)) decal(decor.bayMat,cx,cz,CELL*0.9,CELL*0.9);
+            if(roll(0.18)) buildVehicle(cx+(prnd()-0.5)*1.2,cz+(prnd()-0.5)*1.2,prnd()*6.28,prnd);
+            if(roll(0.12)) buildBarrier(cx+(prnd()-0.5)*2,cz+(prnd()-0.5)*2,prnd()<0.5?0:Math.PI/2);
+            if(roll(0.18)) decal(decor.oilMat,cx+(prnd()-0.5)*3,cz+(prnd()-0.5)*3,1.2+prnd()*1.8,1.2+prnd()*1.8);
+            if(roll(0.10)) decal(decor.arrowMat,cx,cz,1.4,1.4,prnd()*6.28);
+            if(roll(0.14)) buildEmerLight(ci*CELL-off,cz);
             break;
           case CT_CORRIDOR: case CT_HALL:
-            if(prnd()<0.26) buildPipes(cx,cz);
-            if(prnd()<0.10) buildCabinet(cx+(prnd()-0.5)*3,cz+(prnd()-0.5)*3,prnd()<0.5?0:Math.PI/2);
-            if(prnd()<0.07) buildCart(cx+(prnd()-0.5)*2,cz+(prnd()-0.5)*2,prnd()*6.28);
-            if(prnd()<0.06) buildSign(cx+(prnd()-0.5)*2.5,cz+(prnd()-0.5)*2.5,prnd()*6.28);
-            if(prnd()<0.14) buildEmerLight(cx,cz);
-            if(prnd()<0.05) buildTrash(cx,cz);
+            if(roll(0.26)) buildPipes(cx,cz);
+            if(roll(0.10)) buildCabinet(cx+(prnd()-0.5)*3,cz+(prnd()-0.5)*3,prnd()<0.5?0:Math.PI/2);
+            if(roll(0.07)) buildCart(cx+(prnd()-0.5)*2,cz+(prnd()-0.5)*2,prnd()*6.28);
+            if(roll(0.06)) buildSign(cx+(prnd()-0.5)*2.5,cz+(prnd()-0.5)*2.5,prnd()*6.28);
+            if(roll(0.14)) buildEmerLight(cx,cz);
+            if(roll(0.05)) buildTrash(cx,cz);
             break;
           case CT_STORAGE:
-            if(prnd()<0.45) buildShelf(cx+(prnd()-0.5)*1.5,cz+(prnd()-0.5)*1.5,prnd()<0.5?0:Math.PI/2);
-            if(prnd()<0.4) buildCrate(cx,cz,prnd);
-            if(prnd()<0.2) buildCart(cx,cz,prnd()*6.28);
+            if(roll(0.45)) buildShelf(cx+(prnd()-0.5)*1.5,cz+(prnd()-0.5)*1.5,prnd()<0.5?0:Math.PI/2);
+            if(roll(0.4)) buildCrate(cx,cz,prnd);
+            if(roll(0.2)) buildCart(cx,cz,prnd()*6.28);
             break;
           case CT_CHAMBER:
-            if(prnd()<0.5) buildBigPipe(cx,cz,prnd()<0.5?0:Math.PI/2);
-            if(prnd()<0.10) buildColumn(ci*CELL-off,cj*CELL-off);
-            if(prnd()<0.12) buildMachine(cx,cz,prnd()*6.28);
-            if(prnd()<0.20) decal(decor.oilMat,cx+(prnd()-0.5)*3,cz+(prnd()-0.5)*3,1.5+prnd()*2,1.5+prnd()*2);
+            if(roll(0.5)) buildBigPipe(cx,cz,prnd()<0.5?0:Math.PI/2);
+            if(roll(0.10)) buildColumn(ci*CELL-off,cj*CELL-off);
+            if(roll(0.12)) buildMachine(cx,cz,prnd()*6.28);
+            if(roll(0.20)) decal(decor.oilMat,cx+(prnd()-0.5)*3,cz+(prnd()-0.5)*3,1.5+prnd()*2,1.5+prnd()*2);
             break;
           case CT_MACHINE:
-            if(lv===4){ if(prnd()<0.6) buildServerRack(cx+(prnd()-0.5)*2,cz+(prnd()-0.5)*2,prnd()<0.5?0:Math.PI/2); }
-            else { if(prnd()<0.5) buildMachine(cx,cz,prnd()*6.28); if(prnd()<0.2) buildConsole(cx,cz,prnd()*6.28); }
-            if(prnd()<0.12) buildSign(cx+(prnd()-0.5)*2,cz+(prnd()-0.5)*2,prnd()*6.28);
+            if(lv===4){ if(roll(0.6)) buildServerRack(cx+(prnd()-0.5)*2,cz+(prnd()-0.5)*2,prnd()<0.5?0:Math.PI/2); }
+            else { if(roll(0.5)) buildMachine(cx,cz,prnd()*6.28); if(roll(0.2)) buildConsole(cx,cz,prnd()*6.28); }
+            if(roll(0.12)) buildSign(cx+(prnd()-0.5)*2,cz+(prnd()-0.5)*2,prnd()*6.28);
             break;
           case CT_CUBICLE:
-            if(prnd()<0.42) buildCubicle(cx,cz,prnd);
-            if(prnd()<0.05) buildTrash(cx,cz);
+            if(roll(0.42)) buildCubicle(cx,cz,prnd);
+            if(roll(0.05)) buildTrash(cx,cz);
             break;
           case CT_OFFICE: case CT_ROOM:
-            if(prnd()<0.22) buildDeskChair(cx+(prnd()-0.5)*1.5,cz+(prnd()-0.5)*1.5,prnd()*6.28);
-            if(prnd()<0.12) buildCabinet(cx+(prnd()-0.5)*2,cz+(prnd()-0.5)*2,prnd()*6.28);
-            if(prnd()<0.08) buildTrash(cx,cz);
-            if(prnd()<0.05) buildSign(cx,cz,prnd()*6.28);
+            if(roll(0.22)) buildDeskChair(cx+(prnd()-0.5)*1.5,cz+(prnd()-0.5)*1.5,prnd()*6.28);
+            if(roll(0.12)) buildCabinet(cx+(prnd()-0.5)*2,cz+(prnd()-0.5)*2,prnd()*6.28);
+            if(roll(0.08)) buildTrash(cx,cz);
+            if(roll(0.05)) buildSign(cx,cz,prnd()*6.28);
             break;
           case CT_SPECIAL:
             buildTable(cx,cz);   // conference / meeting landmark
             break;
           default: // CT_LOBBY — keep the liminal emptiness; only the rare stray object
-            if(prnd()<0.03) buildTrash(cx,cz);
-            if(prnd()<0.012) buildDeskChair(cx+(prnd()-0.5)*2,cz+(prnd()-0.5)*2,prnd()*6.28);
-            if(prnd()<0.012) buildSign(cx+(prnd()-0.5)*2,cz+(prnd()-0.5)*2,prnd()*6.28);
+            if(roll(0.03)) buildTrash(cx,cz);
+            if(roll(0.012)) buildDeskChair(cx+(prnd()-0.5)*2,cz+(prnd()-0.5)*2,prnd()*6.28);
+            if(roll(0.012)) buildSign(cx+(prnd()-0.5)*2,cz+(prnd()-0.5)*2,prnd()*6.28);
         }
       }
       // landmark furniture (security booths at garage checkpoints, etc.)
